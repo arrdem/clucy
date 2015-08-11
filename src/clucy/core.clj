@@ -114,7 +114,7 @@
   (with-open [^IndexWriter writer (index-writer index)]
     (doseq [m maps]
       (let [^BooleanQuery query (BooleanQuery.)
-            #^"[Lorg.apache.lucene.search.Query;" arr (into-array BooleanQuery [query])]
+            ^"[Lorg.apache.lucene.search.Query;" arr (into-array BooleanQuery [query])]
         (doseq [[key value] m]
           (.add query
                 (BooleanClause.
@@ -214,5 +214,5 @@ fragments."
    (with-open [writer (index-writer index)]
      (let [parser (QueryParser. *version* (as-str default-field) *analyzer*)
            query  (.parse parser query)
-           #^"[Lorg.apache.lucene.search.Query;" arr (into-array [query])]
+           ^"[Lorg.apache.lucene.search.Query;" arr (into-array [query])]
        (.deleteDocuments ^IndexWriter writer arr)))))
