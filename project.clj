@@ -1,4 +1,4 @@
-(defproject clucy "0.4.1"
+(defproject me.arrdem/clucy "0.4.1"
   :description "A Clojure interface to the Lucene search engine"
   :url "http://github/weavejester/clucy"
   :dependencies [[org.clojure/clojure "1.4.0"]
