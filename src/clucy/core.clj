@@ -111,16 +111,18 @@
 (defn delete
   "Deletes hash-maps from the search index."
   [index & maps]
-  (with-open [writer (index-writer index)]
+  (with-open [^IndexWriter writer (index-writer index)]
     (doseq [m maps]
-      (let [query (BooleanQuery.)]
+      (let [^BooleanQuery query (BooleanQuery.)
+            #^"[Lorg.apache.lucene.search.Query;" arr (into-array BooleanQuery [query])]
         (doseq [[key value] m]
           (.add query
                 (BooleanClause.
-                 (TermQuery. (Term. (.toLowerCase (as-str key))
-                                    (.toLowerCase (as-str value))))
+                 (TermQuery.
+                  (Term. (.toLowerCase (as-str key))
+                         (.toLowerCase (as-str value))))
                  BooleanClause$Occur/MUST)))
-        (.deleteDocuments writer query)))))
+        (. ^IndexWriter writer (deleteDocuments arr))))))
 
 (defn- document->map
   "Turn a Document object into a map."
@@ -203,13 +205,14 @@ fragments."
 
 (defn search-and-delete
   "Search the supplied index with a query string and then delete all
-of the results."
+  of the results."
   ([index query]
-     (if *content*
-       (search-and-delete index query :_content)
-       (throw (Exception. "No default search field specified"))))
+   (if *content*
+     (search-and-delete index query :_content)
+     (throw (Exception. "No default search field specified"))))
   ([index query default-field]
-     (with-open [writer (index-writer index)]
-       (let [parser (QueryParser. *version* (as-str default-field) *analyzer*)
-             query  (.parse parser query)]
-         (.deleteDocuments writer query)))))
+   (with-open [writer (index-writer index)]
+     (let [parser (QueryParser. *version* (as-str default-field) *analyzer*)
+           query  (.parse parser query)
+           #^"[Lorg.apache.lucene.search.Query;" arr (into-array [query])]
+       (.deleteDocuments ^IndexWriter writer arr)))))
