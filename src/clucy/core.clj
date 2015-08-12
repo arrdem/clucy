@@ -57,21 +57,24 @@
   :analyzed - when :indexed is enabled use this option to disable/eneble Analyzer for current field.
   :norms - when :indexed is enabled user this option to disable/enable the storing of norms."
   ([document key value]
-     (add-field document key value {}))
+   (add-field document key value {}))
 
   ([document key value meta-map]
+   (let [stored?     (if (false? (:stored meta-map))
+                       Field$Store/NO
+                       Field$Store/YES)
+         how-indexed (if (false? (:indexed meta-map))
+                       Field$Index/NO
+                       (case [(false? (:analyzed meta-map)) (false? (:norms meta-map))]
+                         [false false] Field$Index/ANALYZED
+                         [true false] Field$Index/NOT_ANALYZED
+                         [false true] Field$Index/ANALYZED_NO_NORMS
+                         [true true] Field$Index/NOT_ANALYZED_NO_NORMS))]
      (.add ^Document document
-           (Field. (as-str key) (as-str value)
-                   (if (false? (:stored meta-map))
-                     Field$Store/NO
-                     Field$Store/YES)
-                   (if (false? (:indexed meta-map))
-                     Field$Index/NO
-                     (case [(false? (:analyzed meta-map)) (false? (:norms meta-map))]
-                       [false false] Field$Index/ANALYZED
-                       [true false] Field$Index/NOT_ANALYZED
-                       [false true] Field$Index/ANALYZED_NO_NORMS
-                       [true true] Field$Index/NOT_ANALYZED_NO_NORMS))))))
+           (Field. ^String (as-str key)
+                   ^String (as-str value)
+                   ^Field$Store stored?
+                   ^Field$Index how-indexed)))))
 
 (defn- map-stored
   "Returns a hash-map containing all of the values in the map that
