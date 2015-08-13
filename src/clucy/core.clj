@@ -209,7 +209,9 @@ fragments."
                                :or
                                ,,QueryParser/OR_OPERATOR)))
             query         (.parse parser query)
-            hits          (.search searcher query (int max-results))
+            hits          (if (= max-results :all)
+                            (.search searcher query)
+                            (.search searcher query (int max-results)))
             highlighter   (make-highlighter query searcher highlight)
             start         (* page results-per-page)
             end           (min (+ start results-per-page)
