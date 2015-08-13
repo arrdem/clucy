@@ -192,32 +192,45 @@ fragments."
   "Search the supplied index with a query string."
   [index query max-results
    & {:keys [highlight default-field default-operator page results-per-page]
-      :or {page 0 results-per-page max-results}}]
+      :or {page 0}}]
   (if (every? false? [default-field *content*])
     (throw (Exception. "No default search field specified"))
     (with-open [reader (index-reader index)]
-      (let [default-field (or default-field :_content)
-            searcher      (IndexSearcher. reader)
-            parser        (doto (QueryParser. *version*
-                                              (as-str default-field)
-                                              *analyzer*)
-                            (.setDefaultOperator
-                             (case (or default-operator :or)
-                               :and
-                               ,,QueryParser/AND_OPERATOR
+      (let [default-field    (or default-field :_content)
 
-                               :or
-                               ,,QueryParser/OR_OPERATOR)))
-            query         (if (= query :all)
-                            (MatchAllDocsQuery.)
-                            (.parse parser query))
-            hits          (if (= max-results :all)
-                            (.search searcher query)
-                            (.search searcher query (int max-results)))
-            highlighter   (make-highlighter query searcher highlight)
-            start         (* page results-per-page)
-            end           (min (+ start results-per-page)
-                               (.totalHits hits))]
+            searcher         (IndexSearcher. reader)
+
+            parser           (doto (QueryParser. *version*
+                                                 (as-str default-field)
+                                                 *analyzer*)
+                               (.setDefaultOperator
+                                (case (or default-operator :or)
+                                  :and
+                                  ,,QueryParser/AND_OPERATOR
+
+                                  :or
+                                  ,,QueryParser/OR_OPERATOR)))
+
+            max-results      (if (= query :all)
+                               Integer/MAX_VALUE
+                               max-results)
+
+            results-per-page (or results-per-page max-results)
+
+            query            (if (= query :all)
+                               (MatchAllDocsQuery.)
+                               (.parse parser query))
+
+            _                (println max-results query)
+
+            hits             (.search searcher query (int max-results))
+
+            highlighter      (make-highlighter query searcher highlight)
+
+            start            (* page results-per-page)
+
+            end              (min (+ start results-per-page)
+                                  (.totalHits hits))]
         (doall
          (with-meta
            (for [hit (map (partial aget (.scoreDocs hits))
