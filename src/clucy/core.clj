@@ -8,7 +8,7 @@
            (org.apache.lucene.queryparser.classic QueryParser)
            (org.apache.lucene.search BooleanClause BooleanClause$Occur
                                      BooleanQuery IndexSearcher Query ScoreDoc
-                                     Scorer TermQuery)
+                                     Scorer TermQuery MatchAllDocsQuery)
            (org.apache.lucene.search.highlight Highlighter QueryScorer
                                                SimpleHTMLFormatter)
            (org.apache.lucene.util Version AttributeSource)
@@ -208,7 +208,9 @@ fragments."
 
                                :or
                                ,,QueryParser/OR_OPERATOR)))
-            query         (.parse parser query)
+            query         (if (= query :all)
+                            (MatchAllDocsQuery.)
+                            (.parse parser query))
             hits          (if (= max-results :all)
                             (.search searcher query)
                             (.search searcher query (int max-results)))
