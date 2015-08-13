@@ -221,8 +221,6 @@ fragments."
                                (MatchAllDocsQuery.)
                                (.parse parser query))
 
-            _                (println max-results query)
-
             hits             (.search searcher query (int max-results))
 
             highlighter      (make-highlighter query searcher highlight)
