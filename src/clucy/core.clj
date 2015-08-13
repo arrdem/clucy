@@ -14,8 +14,11 @@
            (org.apache.lucene.util Version AttributeSource)
            (org.apache.lucene.store NIOFSDirectory RAMDirectory Directory)))
 
-(def ^{:dynamic true} *version* Version/LUCENE_CURRENT)
-(def ^{:dynamic true} *analyzer* (StandardAnalyzer. *version*))
+(def ^{:dynamic true} *version*
+  Version/LUCENE_CURRENT)
+
+(def ^{:dynamic true} *analyzer*
+  (StandardAnalyzer. *version*))
 
 ;; To avoid a dependency on either contrib or 1.2+
 (defn as-str ^String [x]
@@ -63,13 +66,22 @@
    (let [stored?     (if (false? (:stored meta-map))
                        Field$Store/NO
                        Field$Store/YES)
+
          how-indexed (if (false? (:indexed meta-map))
                        Field$Index/NO
-                       (case [(false? (:analyzed meta-map)) (false? (:norms meta-map))]
-                         [false false] Field$Index/ANALYZED
-                         [true false] Field$Index/NOT_ANALYZED
-                         [false true] Field$Index/ANALYZED_NO_NORMS
-                         [true true] Field$Index/NOT_ANALYZED_NO_NORMS))]
+                       (case [(false? (:analyzed meta-map))
+                              (false? (:norms meta-map))]
+                         [false false]
+                         ,,Field$Index/ANALYZED
+
+                         [true false]
+                         ,,Field$Index/NOT_ANALYZED
+
+                         [false true]
+                         ,,Field$Index/ANALYZED_NO_NORMS
+
+                         [true true]
+                         ,,Field$Index/NOT_ANALYZED_NO_NORMS))]
      (.add ^Document document
            (Field. ^String (as-str key)
                    ^String (as-str value)
@@ -80,13 +92,14 @@
   "Returns a hash-map containing all of the values in the map that
   will be stored in the search index."
   [map-in]
-  (merge {}
-         (filter (complement nil?)
-                 (map (fn [item]
-                        (if (or (= nil (meta map-in))
-                                (not= false
-                                      (:stored ((first item) (meta map-in)))))
-                          item)) map-in))))
+  (->> map-in
+       (map (fn [item]
+              (if (or (= nil (meta map-in))
+                      (not= false
+                            (:stored ((first item) (meta map-in)))))
+                item)))
+       (filter (complement nil?))
+       (merge {})))
 
 (defn- concat-values
   "Concatenate all the maps values being stored into a single string."
@@ -99,7 +112,7 @@
   (let [document (Document.)]
     (doseq [[key value] map]
       (add-field document key value (key (meta map))))
-    (if *content*
+    (when *content*
       (add-field document :_content (concat-values map)))
     document))
 
@@ -131,6 +144,7 @@
   "Turn a Document object into a map."
   ([^Document document score]
      (document->map document score (constantly nil)))
+
   ([^Document document score highlighter]
      (let [m (into {} (for [^Field f (.getFields document)]
                         [(keyword (.name f)) (.stringValue f)]))
@@ -183,36 +197,44 @@ fragments."
     (throw (Exception. "No default search field specified"))
     (with-open [reader (index-reader index)]
       (let [default-field (or default-field :_content)
-            searcher (IndexSearcher. reader)
-            parser (doto (QueryParser. *version*
-                                       (as-str default-field)
-                                       *analyzer*)
-                     (.setDefaultOperator (case (or default-operator :or)
-                                            :and QueryParser/AND_OPERATOR
-                                            :or  QueryParser/OR_OPERATOR)))
-            query (.parse parser query)
-            hits (.search searcher query (int max-results))
-            highlighter (make-highlighter query searcher highlight)
-            start (* page results-per-page)
-            end (min (+ start results-per-page) (.totalHits hits))]
-        (doall
-         (with-meta (for [hit (map (partial aget (.scoreDocs hits))
-                                   (range start end))]
-                      (document->map (.doc ^IndexSearcher searcher
-                                           (.doc ^ScoreDoc hit))
-                                     (.score ^ScoreDoc hit)
+            searcher      (IndexSearcher. reader)
+            parser        (doto (QueryParser. *version*
+                                              (as-str default-field)
+                                              *analyzer*)
+                            (.setDefaultOperator
+                             (case (or default-operator :or)
+                               :and
+                               ,,QueryParser/AND_OPERATOR
 
-                                     highlighter))
+                               :or
+                               ,,QueryParser/OR_OPERATOR)))
+            query         (.parse parser query)
+            hits          (.search searcher query (int max-results))
+            highlighter   (make-highlighter query searcher highlight)
+            start         (* page results-per-page)
+            end           (min (+ start results-per-page)
+                               (.totalHits hits))]
+        (doall
+         (with-meta
+           (for [hit (map (partial aget (.scoreDocs hits))
+                          (range start end))]
+             (document->map
+              (.doc ^IndexSearcher searcher
+                    (.doc ^ScoreDoc hit))
+              (.score ^ScoreDoc hit)
+              highlighter))
            {:_total-hits (.totalHits hits)
-            :_max-score (.getMaxScore hits)}))))))
+            :_max-score  (.getMaxScore hits)}))))))
 
 (defn search-and-delete
   "Search the supplied index with a query string and then delete all
   of the results."
+
   ([index query]
    (if *content*
      (search-and-delete index query :_content)
      (throw (Exception. "No default search field specified"))))
+
   ([index query default-field]
    (with-open [writer (index-writer index)]
      (let [parser (QueryParser. *version* (as-str default-field) *analyzer*)
