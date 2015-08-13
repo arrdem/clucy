@@ -29,7 +29,8 @@
     (str x)))
 
 ;; flag to indicate a default "_content" field should be maintained
-(def ^{:dynamic true} *content* true)
+(def ^{:dynamic true} *content*
+  true)
 
 (defn memory-index
   "Create a new index in RAM."
@@ -54,6 +55,90 @@
   ^IndexReader
   [index]
   (DirectoryReader/open ^Directory index))
+
+
+;; We want to hold IndexWriters open for performance, but we can't
+;; actually have multiple IndexWriters open on a single index.
+;;
+;; Thankfully IndexWriters are thread safe.
+;;
+;; As a result we can safely "open" both a Reader and a Writer for any
+;; given Index, and maintain a cache mapping from Index instance to a
+;; (Reader, Writer, Index) structure which may be thread shared.
+
+(defonce ^{:private true} index-cache
+  (ref {}))
+
+;; We also want some common abstraction for working with either
+;; a "real" open index or something we know how to open into either a
+;; reader or writer
+
+(defprotocol IIndex
+  (as-reader [_])
+  (as-writer [_])
+  (as-index  [_]))
+
+;; Now the tuple thing
+
+(declare close-index)
+
+(deftype AnIndex [reader writer ind]
+  java.io.Closeable
+  (close [this]
+    (close-index this))
+
+  IIndex
+  (as-reader [_] reader)
+  (as-writer [_] writer)
+  (as-index  [_] ind))
+
+;; Open tuple instances using the cache
+
+(defn open-index [ind]
+  (let [key (if (instance? NIOFSDirectory ind)
+              (.getDirectory ind)
+              ind)]
+    (dosync
+     (if-let [ai (get @index-cache key)]
+       ai
+       (let [ai (AnIndex.
+                 (index-reader ind)
+                 (index-writer ind)
+                 ind)]
+         (alter index-cache assoc key ai)
+         ai)))))
+
+;; Close them invalidating the cache
+
+(defn close-index [ind]
+  {:pre [(instance? AnIndex ind)]}
+  (let [key (if (instance? NIOFSDirectory ind)
+              (.getDirectory ind)
+              ind)]
+    (dosync
+     (.close (.reader ind))
+     (.close (.writer ind))
+     (alter index-cache dissoc key))
+    nil))
+
+;; And extend this abstraction to the other interesting types
+
+(extend-protocol IIndex
+  NIOFSDirectory
+  (as-reader [d]
+    (as-reader (open-index d)))
+  (as-writer [d]
+    (as-writer (open-index d)))
+  (as-index [d] d)
+
+  RAMDirectory
+  (as-reader [d]
+    (as-reader (open-index d)))
+  (as-writer [d]
+    (as-writer (open-index d)))
+  (as-index [d] d))
+
+
 
 (defn- add-field
   "Add a Field to a Document.
@@ -122,7 +207,7 @@
 (defn add
   "Add hash-maps to the search index."
   [index & maps]
-  (with-open [writer (index-writer index)]
+  (let [writer (as-writer index)]
     (doseq [m maps]
       (.addDocument writer
                     (map->document m)))))
@@ -130,7 +215,7 @@
 (defn delete
   "Deletes hash-maps from the search index."
   [index & maps]
-  (with-open [^IndexWriter writer (index-writer index)]
+  (let [writer (as-writer index)]
     (doseq [m maps]
       (let [^BooleanQuery query (BooleanQuery.)
             ^"[Lorg.apache.lucene.search.Query;" arr (into-array BooleanQuery [query])]
@@ -146,27 +231,35 @@
 (defn- document->map
   "Turn a Document object into a map."
   ([^Document document score]
-     (document->map document score (constantly nil)))
+   (document->map document score (constantly nil)))
 
   ([^Document document score highlighter]
-     (let [m (into {} (for [^Field f (.getFields document)]
-                        [(keyword (.name f)) (.stringValue f)]))
-           fragments (highlighter m) ; so that we can highlight :_content
-           m (dissoc m :_content)]
-       (with-meta
-         m
-         (-> (into {}
-                   (for [^Field f (.getFields document)
-                         :let [field-type (.fieldType f)]]
-                     [(keyword (.name f)) {:indexed (.indexed field-type)
-                                           :stored (.stored field-type)
-                                           :tokenized (.tokenized field-type)}]))
-             (assoc :_fragments fragments :_score score)
-             (dissoc :_content))))))
+   (let [m         (->> (for [^Field f (.getFields document)]
+                          [(keyword (.name f)) (.stringValue f)])
+                        (into {}))
+
+         ;; so that we can highlight :_content
+         fragments (highlighter m)
+
+         doc-map   (dissoc m :_content)
+
+         doc-meta  (as-> document d
+                     (for [^Field f           (.getFields d)
+                           :let   [field-type (.fieldType f)]]
+                       [(keyword (.name f))
+                        {:indexed   (.indexed field-type)
+                         :stored    (.stored field-type)
+                         :tokenized (.tokenized field-type)}])
+                     (into {} d)
+                     (assoc d
+                            :_fragments fragments
+                            :_score score)
+                     (dissoc d :_content))]
+     (with-meta doc-map doc-meta))))
 
 (defn- make-highlighter
   "Create a highlighter function which will take a map and return highlighted
-fragments."
+  fragments."
   [^Query query ^IndexSearcher searcher config]
   (if config
     (let [indexReader (.getIndexReader searcher)
@@ -198,51 +291,51 @@ fragments."
       :or {page 0}}]
   (if (every? false? [default-field *content*])
     (throw (Exception. "No default search field specified"))
-    (with-open [reader (index-reader index)]
-      (let [default-field    (or default-field :_content)
+    (let [reader           (as-reader index)
+          default-field    (or default-field :_content)
 
-            searcher         (IndexSearcher. reader)
+          searcher         (IndexSearcher. reader)
 
-            parser           (doto (QueryParser. *version*
-                                                 (as-str default-field)
-                                                 *analyzer*)
-                               (.setDefaultOperator
-                                (case (or default-operator :or)
-                                  :and
-                                  ,,QueryParser/AND_OPERATOR
+          parser           (doto (QueryParser. *version*
+                                               (as-str default-field)
+                                               *analyzer*)
+                             (.setDefaultOperator
+                              (case (or default-operator :or)
+                                :and
+                                ,,QueryParser/AND_OPERATOR
 
-                                  :or
-                                  ,,QueryParser/OR_OPERATOR)))
+                                :or
+                                ,,QueryParser/OR_OPERATOR)))
 
-            max-results      (if (= query :all)
-                               Integer/MAX_VALUE
-                               max-results)
+          max-results      (if (= query :all)
+                             Integer/MAX_VALUE
+                             max-results)
 
-            results-per-page (or results-per-page max-results)
+          results-per-page (or results-per-page max-results)
 
-            query            (if (= query :all)
-                               (MatchAllDocsQuery.)
-                               (.parse parser query))
+          query            (if (= query :all)
+                             (MatchAllDocsQuery.)
+                             (.parse parser query))
 
-            hits             (.search searcher query (int max-results))
+          hits             (.search searcher query (int max-results))
 
-            highlighter      (make-highlighter query searcher highlight)
+          highlighter      (make-highlighter query searcher highlight)
 
-            start            (* page results-per-page)
+          start            (* page results-per-page)
 
-            end              (min (+ start results-per-page)
-                                  (.totalHits hits))]
-        (doall
-         (with-meta
-           (for [hit (map (partial aget (.scoreDocs hits))
-                          (range start end))]
-             (document->map
-              (.doc ^IndexSearcher searcher
-                    (.doc ^ScoreDoc hit))
-              (.score ^ScoreDoc hit)
-              highlighter))
-           {:_total-hits (.totalHits hits)
-            :_max-score  (.getMaxScore hits)}))))))
+          end              (min (+ start results-per-page)
+                                (.totalHits hits))]
+      (doall
+       (with-meta
+         (for [hit (map (partial aget (.scoreDocs hits))
+                        (range start end))]
+           (document->map
+            (.doc ^IndexSearcher searcher
+                  (.doc ^ScoreDoc hit))
+            (.score ^ScoreDoc hit)
+            highlighter))
+         {:_total-hits (.totalHits hits)
+          :_max-score  (.getMaxScore hits)})))))
 
 (defn search-and-delete
   "Search the supplied index with a query string and then delete all
@@ -254,8 +347,10 @@ fragments."
      (throw (Exception. "No default search field specified"))))
 
   ([index query default-field]
-   (with-open [writer (index-writer index)]
+   (let [writer (as-writer index)]
      (let [parser (QueryParser. *version* (as-str default-field) *analyzer*)
-           query  (.parse parser query)
+           query  (if (= query :all)
+                    (MatchAllDocsQuery.)
+                    (.parse parser query))
            ^"[Lorg.apache.lucene.search.Query;" arr (into-array [query])]
        (.deleteDocuments ^IndexWriter writer arr)))))
