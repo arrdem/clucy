@@ -4,7 +4,9 @@
            (org.apache.lucene.analysis.standard StandardAnalyzer)
            (org.apache.lucene.document Document Field Field$Index Field$Store)
            (org.apache.lucene.index IndexWriter IndexReader Term
-                                    IndexWriterConfig DirectoryReader FieldInfo)
+                                    IndexWriterConfig
+                                    IndexWriterConfig$OpenMode
+                                    DirectoryReader FieldInfo)
            (org.apache.lucene.queryparser.classic QueryParser)
            (org.apache.lucene.search BooleanClause BooleanClause$Occur
                                      BooleanQuery IndexSearcher Query ScoreDoc
@@ -43,8 +45,9 @@
   "Create an IndexWriter."
   ^IndexWriter
   [index]
-  (IndexWriter. index
-                (IndexWriterConfig. *version* *analyzer*)))
+  (let [iwcfg (IndexWriterConfig. *version* *analyzer*)]
+    (.setOpenMode iwcfg IndexWriterConfig$OpenMode/CREATE_OR_APPEND)
+    (IndexWriter. index iwcfg)))
 
 (defn- index-reader
   "Create an IndexReader."
