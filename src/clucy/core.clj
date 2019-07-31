@@ -28,6 +28,13 @@
     (name x)
     (str x)))
 
+(defn as-dir ^File [x]
+  (if-not (instance? File x)
+    (if (string? x)
+      (File. x)
+      (throw (Exception. "Expects a java.{io.File,lang.String}")))
+    x))
+
 ;; flag to indicate a default "_content" field should be maintained
 (def ^{:dynamic true} *content*
   true)
@@ -38,22 +45,22 @@
   (RAMDirectory.))
 
 (defn disk-index
-  "Create a new index in a directory on disk."
-  [^String dir-path]
-  (NIOFSDirectory. (File. dir-path)))
+  "Create a new index in a directory on disk. Dir should be a File or
+  a String, either must name a directory which exists."
+  [dir]
+  (let [^File d (as-dir dir)]
+    (NIOFSDirectory. d)))
 
-(defn- index-writer
+(defn index-writer
   "Create an IndexWriter."
-  ^IndexWriter
-  [index]
+  ^IndexWriter [index]
   (let [iwcfg (IndexWriterConfig. *version* *analyzer*)]
     (.setOpenMode iwcfg IndexWriterConfig$OpenMode/CREATE_OR_APPEND)
     (IndexWriter. index iwcfg)))
 
-(defn- index-reader
+(defn index-reader
   "Create an IndexReader."
-  ^IndexReader
-  [index]
+  ^IndexReader [index]
   (DirectoryReader/open ^Directory index))
 
 
@@ -66,8 +73,8 @@
 ;; given Index, and maintain a cache mapping from Index instance to a
 ;; (Reader, Writer, Index) structure which may be thread shared.
 
-(defonce ^{:private true} index-cache
-  (ref {}))
+(defonce index-cache
+  (atom {}))
 
 ;; We also want some common abstraction for working with either
 ;; a "real" open index or something we know how to open into either a
@@ -98,15 +105,18 @@
   (let [key (if (instance? NIOFSDirectory ind)
               (.getDirectory ind)
               ind)]
-    (dosync
-     (if-let [ai (get @index-cache key)]
-       ai
-       (let [ai (AnIndex.
-                 (index-reader ind)
-                 (index-writer ind)
-                 ind)]
-         (alter index-cache assoc key ai)
-         ai)))))
+    (if-let [ai (get @index-cache key)]
+      ai
+      (let [iw (index-writer ind)]
+        (. iw (flush true true))
+        (try
+          (let [ir (index-reader ind)
+                ai (AnIndex. ir iw ind)]
+            (swap! index-cache assoc key ai)
+            ai)
+          (catch Exception e
+            (.close iw)
+            (throw e)))))))
 
 ;; Close them invalidating the cache
 
@@ -115,10 +125,9 @@
   (let [key (if (instance? NIOFSDirectory ind)
               (.getDirectory ind)
               ind)]
-    (dosync
-     (.close (.reader ind))
-     (.close (.writer ind))
-     (alter index-cache dissoc key))
+    (.close (.reader ind))
+    (.close (.writer ind))
+    (swap! index-cache dissoc key)
     nil))
 
 ;; And extend this abstraction to the other interesting types
@@ -130,6 +139,12 @@
   (as-writer [d]
     (as-writer (open-index d)))
   (as-index [d] d)
+
+  IndexWriter
+  (as-writer [d] d)
+
+  IndexReader
+  (as-reader [d] d)
 
   RAMDirectory
   (as-reader [d]
